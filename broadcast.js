@@ -13,6 +13,17 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
 const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, "broadcast.sqlite");
 const MAX_HISTORY_LIMIT = 200;
 const CAPTCHA_TTL_MS = 5 * 60 * 1000;
+const RESERVED_EVENT_KEYS = new Set([
+  "connect",
+  "connect_error",
+  "disconnect",
+  "disconnecting",
+  "newListener",
+  "removeListener",
+  "join",
+  "leave",
+  "error",
+]);
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -169,6 +180,10 @@ function normalizeName(value) {
 
 function validateRoomName(name) {
   return /^[A-Za-z0-9_-]{6,32}$/.test(name);
+}
+
+function validateEventKey(key) {
+  return /^[A-Za-z0-9_-]{1,64}$/.test(key) && !RESERVED_EVENT_KEYS.has(key);
 }
 
 function hasValue(value) {
@@ -410,8 +425,13 @@ async function handlePush(request, response, requestUrl) {
     return;
   }
 
+  if (!validateEventKey(pair.key)) {
+    sendJson(response, 400, { success: false, error: "Key must be 1-64 characters: A-Z, a-z, 0-9, _ or -, and not a reserved socket event" });
+    return;
+  }
+
   const message = addMessage(room, pair.key, pair.value);
-  io.to(room.name).emit("message", message);
+  io.to(room.name).emit(pair.key, pair.value);
 
   sendJson(response, 200, {
     success: true,
