@@ -65,6 +65,10 @@ button:disabled {
   gap: 10px;
 }
 
+.language-toggle {
+  min-width: 64px;
+}
+
 .page {
   width: min(1040px, calc(100% - 32px));
   margin: 0 auto;
@@ -93,7 +97,7 @@ button:disabled {
 
 .button.compact {
   width: auto;
-  min-width: 72px;
+  min-width: 76px;
 }
 
 .button.primary {
@@ -130,6 +134,12 @@ button:disabled {
 
 .icon-button:hover {
   background: #eef2ef;
+}
+
+.icon-button.small {
+  width: 32px;
+  min-height: 32px;
+  flex-basis: 32px;
 }
 
 .icon-button.danger {
@@ -291,7 +301,7 @@ input:focus {
 
 .dialog {
   position: relative;
-  width: min(460px, 100%);
+  width: min(560px, 100%);
   padding: 24px;
   border-radius: 8px;
   background: #ffffff;
@@ -325,6 +335,36 @@ label {
 
 .captcha-field {
   gap: 8px;
+}
+
+.switch-field {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #d8ddd4;
+  border-radius: 8px;
+  background: #f9faf8;
+}
+
+.switch-field input {
+  width: 18px;
+  min-height: 18px;
+  margin: 2px 0 0;
+  accent-color: #215f78;
+}
+
+.switch-field span {
+  display: grid;
+  gap: 3px;
+}
+
+.switch-field small {
+  color: #66716b;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
 }
 
 .captcha-row {
@@ -366,9 +406,97 @@ label {
   margin-top: 20px;
 }
 
+.help-content {
+  display: grid;
+  gap: 16px;
+  margin-top: 20px;
+}
+
+.help-content section {
+  display: grid;
+  gap: 8px;
+}
+
+.help-content h3 {
+  margin: 0;
+  color: #182026;
+  font-size: 16px;
+}
+
+.help-content p,
+.help-content ul {
+  margin: 0;
+  color: #3e494f;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.help-content ul {
+  display: grid;
+  gap: 6px;
+  padding-left: 20px;
+}
+
 .created-result > div:not(.dialog-actions) {
   display: grid;
   gap: 6px;
+}
+
+.copy-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.copy-field strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.copy-field .curl-example {
+  min-width: 0;
+}
+
+.inline-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.domain-value {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.scheme-control {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid #c8d0c4;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.scheme-control button {
+  min-height: 34px;
+  padding: 0 9px;
+  color: #3e494f;
+  border: 0;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.scheme-control button + button {
+  border-left: 1px solid #c8d0c4;
+}
+
+.scheme-control button.active {
+  color: #ffffff;
+  background: #215f78;
 }
 
 code,
@@ -381,6 +509,24 @@ code {
   padding: 10px;
   border-radius: 6px;
   background: #eef2ef;
+}
+
+.curl-example {
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  border-radius: 6px;
+  color: #1d2a30;
+  background: #f1f5f2;
+}
+
+.curl-example code {
+  display: block;
+  min-width: max-content;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  white-space: pre;
 }
 
 .error {
@@ -450,16 +596,34 @@ code {
   font-size: 16px;
 }
 
+.message-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.message-body {
+  position: relative;
+  min-width: 0;
+}
+
 .message-item pre {
   overflow: auto;
   max-height: 320px;
   margin: 0;
-  padding: 12px;
+  padding: 12px 48px 12px 12px;
   border-radius: 6px;
   color: #1d2a30;
   background: #f1f5f2;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.message-copy {
+  position: absolute;
+  top: 8px;
+  right: 8px;
 }
 
 .empty-state {
@@ -529,5 +693,22 @@ code {
 
   .dialog-actions {
     display: grid;
+  }
+
+  .copy-field,
+  .domain-value {
+    grid-template-columns: 1fr;
+  }
+
+  .inline-actions {
+    display: grid;
+  }
+
+  .scheme-control {
+    width: 100%;
+  }
+
+  .scheme-control button {
+    flex: 1;
   }
 }

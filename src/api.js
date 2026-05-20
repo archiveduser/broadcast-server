@@ -28,7 +28,7 @@ export async function fetchCaptcha() {
   };
 }
 
-export async function createRoom({ name, captchaId, captcha }) {
+export async function createRoom({ name, captchaId, captcha, allowApiQuery = true }) {
   const response = await fetch("/api/rooms", {
     method: "POST",
     headers: {
@@ -38,7 +38,7 @@ export async function createRoom({ name, captchaId, captcha }) {
       name,
       captchaId,
       captcha,
-      allowApiQuery: true,
+      allowApiQuery,
     }),
   });
 

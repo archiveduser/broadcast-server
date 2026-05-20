@@ -13,6 +13,7 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
 const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, "broadcast.sqlite");
 const MAX_HISTORY_LIMIT = 200;
 const CAPTCHA_TTL_MS = 5 * 60 * 1000;
+const CAPTCHA_LENGTH = 4;
 const RESERVED_EVENT_KEYS = new Set([
   "connect",
   "connect_error",
@@ -48,10 +49,65 @@ db.exec(`
     room TEXT NOT NULL,
     key TEXT NOT NULL,
     value_json TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
     FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE
   );
+`);
 
+function migrateMessageCreatedAt() {
+  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'messages'").get();
+  if (!row?.sql || /\bcreated_at\s+INTEGER\b/i.test(row.sql)) {
+    return;
+  }
+
+  db.exec(`
+    PRAGMA foreign_keys = OFF;
+    BEGIN;
+
+    DROP INDEX IF EXISTS idx_messages_room_id;
+    DROP INDEX IF EXISTS idx_messages_room_created;
+    DROP INDEX IF EXISTS idx_messages_created;
+
+    ALTER TABLE messages RENAME TO messages_old;
+
+    CREATE TABLE messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      room_id INTEGER NOT NULL,
+      room TEXT NOT NULL,
+      key TEXT NOT NULL,
+      value_json TEXT NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
+      FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE
+    );
+
+    INSERT INTO messages (id, room_id, room, key, value_json, created_at)
+    SELECT
+      id,
+      room_id,
+      room,
+      key,
+      value_json,
+      COALESCE(
+        CASE
+          WHEN typeof(created_at) = 'integer' THEN created_at
+          WHEN typeof(created_at) = 'real' THEN CAST(created_at AS INTEGER)
+          WHEN typeof(created_at) = 'text' AND instr(created_at, '-') = 0 THEN CAST(created_at AS INTEGER)
+          ELSE CAST(strftime('%s', created_at) AS INTEGER) * 1000
+        END,
+        CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+      )
+    FROM messages_old;
+
+    DROP TABLE messages_old;
+
+    COMMIT;
+    PRAGMA foreign_keys = ON;
+  `);
+}
+
+migrateMessageCreatedAt();
+
+db.exec(`
   CREATE INDEX IF NOT EXISTS idx_rooms_token ON rooms(token);
   CREATE INDEX IF NOT EXISTS idx_messages_room_id ON messages(room_id, id);
   CREATE INDEX IF NOT EXISTS idx_messages_room_created ON messages(room, created_at, id);
@@ -197,7 +253,7 @@ function createToken() {
 function createCaptchaText() {
   const alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
   let text = "";
-  for (let index = 0; index < 5; index += 1) {
+  for (let index = 0; index < CAPTCHA_LENGTH; index += 1) {
     text += alphabet[crypto.randomInt(alphabet.length)];
   }
   return text;
@@ -214,7 +270,7 @@ function cleanupCaptchas() {
 
 function captchaSvg(text) {
   const chars = [...text].map((char, index) => {
-    const x = 24 + index * 28;
+    const x = 38 + index * 32;
     const y = 46 + crypto.randomInt(-5, 6);
     const rotate = crypto.randomInt(-18, 19);
     return `<text x="${x}" y="${y}" transform="rotate(${rotate} ${x} ${y})">${char}</text>`;
