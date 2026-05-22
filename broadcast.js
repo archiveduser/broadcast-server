@@ -1,7 +1,8 @@
 const crypto = require("node:crypto");
 const http = require("node:http");
+const path = require("node:path");
 const { URL } = require("node:url");
-require("dotenv/config");
+require("dotenv").config({ path: path.join(__dirname, ".env") });
 const { PrismaClient } = require("@prisma/client");
 const { PrismaMariaDb } = require("@prisma/adapter-mariadb");
 const { Server } = require("socket.io");
