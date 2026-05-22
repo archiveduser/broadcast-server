@@ -1,16 +1,15 @@
 const crypto = require("node:crypto");
-const fs = require("node:fs");
 const http = require("node:http");
-const path = require("node:path");
 const { URL } = require("node:url");
-const { DatabaseSync } = require("node:sqlite");
+require("dotenv/config");
+const { PrismaClient } = require("@prisma/client");
+const { PrismaMariaDb } = require("@prisma/adapter-mariadb");
 const { Server } = require("socket.io");
 
-const HOST = process.env.HOST || "0.0.0.0";
-const PORT = Number.parseInt(process.env.PORT || "23000", 10);
-const SOCKET_PATH = process.env.SOCKET_PATH || "/socket.io";
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
-const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, "broadcast.sqlite");
+const HOST = process.env.BROADCAST_HOST || "0.0.0.0";
+const PORT = Number.parseInt(process.env.BROADCAST_PORT || "23000", 10);
+const SOCKET_PATH = process.env.BROADCAST_SOCKET_PATH || "/socket.io";
+const DATABASE_URL = process.env.BROADCAST_DATABASE_URL || process.env.DATABASE_URL;
 const MAX_HISTORY_LIMIT = 200;
 const CAPTCHA_TTL_MS = 5 * 60 * 1000;
 const CAPTCHA_LENGTH = 4;
@@ -26,120 +25,14 @@ const RESERVED_EVENT_KEYS = new Set([
   "error",
 ]);
 
-fs.mkdirSync(DATA_DIR, { recursive: true });
-
-const captchas = new Map();
-const db = new DatabaseSync(DB_PATH);
-
-db.exec(`
-  PRAGMA journal_mode = WAL;
-  PRAGMA foreign_keys = ON;
-
-  CREATE TABLE IF NOT EXISTS rooms (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL UNIQUE,
-    token TEXT NOT NULL UNIQUE,
-    allow_api_query INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-
-  CREATE TABLE IF NOT EXISTS messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    room_id INTEGER NOT NULL,
-    room TEXT NOT NULL,
-    key TEXT NOT NULL,
-    value_json TEXT NOT NULL,
-    created_at INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
-    FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE
-  );
-`);
-
-function migrateMessageCreatedAt() {
-  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'messages'").get();
-  if (!row?.sql || /\bcreated_at\s+INTEGER\b/i.test(row.sql)) {
-    return;
-  }
-
-  db.exec(`
-    PRAGMA foreign_keys = OFF;
-    BEGIN;
-
-    DROP INDEX IF EXISTS idx_messages_room_id;
-    DROP INDEX IF EXISTS idx_messages_room_created;
-    DROP INDEX IF EXISTS idx_messages_created;
-
-    ALTER TABLE messages RENAME TO messages_old;
-
-    CREATE TABLE messages (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      room_id INTEGER NOT NULL,
-      room TEXT NOT NULL,
-      key TEXT NOT NULL,
-      value_json TEXT NOT NULL,
-      created_at INTEGER NOT NULL DEFAULT (CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)),
-      FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE
-    );
-
-    INSERT INTO messages (id, room_id, room, key, value_json, created_at)
-    SELECT
-      id,
-      room_id,
-      room,
-      key,
-      value_json,
-      COALESCE(
-        CASE
-          WHEN typeof(created_at) = 'integer' THEN created_at
-          WHEN typeof(created_at) = 'real' THEN CAST(created_at AS INTEGER)
-          WHEN typeof(created_at) = 'text' AND instr(created_at, '-') = 0 THEN CAST(created_at AS INTEGER)
-          ELSE CAST(strftime('%s', created_at) AS INTEGER) * 1000
-        END,
-        CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
-      )
-    FROM messages_old;
-
-    DROP TABLE messages_old;
-
-    COMMIT;
-    PRAGMA foreign_keys = ON;
-  `);
+if (!DATABASE_URL) {
+  throw new Error("Missing BROADCAST_DATABASE_URL. Set it in .env, for example mysql://user:password@127.0.0.1:3306/broadcast");
 }
 
-migrateMessageCreatedAt();
-
-db.exec(`
-  CREATE INDEX IF NOT EXISTS idx_rooms_token ON rooms(token);
-  CREATE INDEX IF NOT EXISTS idx_messages_room_id ON messages(room_id, id);
-  CREATE INDEX IF NOT EXISTS idx_messages_room_created ON messages(room, created_at, id);
-  CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at, id);
-`);
-
-const statements = {
-  createRoom: db.prepare("INSERT INTO rooms (name, token, allow_api_query) VALUES (?, ?, ?)"),
-  getRoomByName: db.prepare(`
-    SELECT id, name, token, allow_api_query AS allowApiQuery, created_at AS createdAt
-    FROM rooms
-    WHERE name = ?
-  `),
-  getRoomByToken: db.prepare(`
-    SELECT id, name, token, allow_api_query AS allowApiQuery, created_at AS createdAt
-    FROM rooms
-    WHERE token = ?
-  `),
-  addMessage: db.prepare("INSERT INTO messages (room_id, room, key, value_json) VALUES (?, ?, ?, ?)"),
-  getMessage: db.prepare(`
-    SELECT id, room, key, value_json AS valueJson, created_at AS createdAt
-    FROM messages
-    WHERE id = ?
-  `),
-  listRoomMessages: db.prepare(`
-    SELECT id, room, key, value_json AS valueJson, created_at AS createdAt
-    FROM messages
-    WHERE room = ?
-    ORDER BY id DESC
-    LIMIT ?
-  `),
-};
+const captchas = new Map();
+const prisma = new PrismaClient({
+  adapter: new PrismaMariaDb(DATABASE_URL),
+});
 
 function send(response, statusCode, body, headers = {}) {
   response.writeHead(statusCode, {
@@ -350,19 +243,73 @@ function getRequestToken(request, payload) {
   ).toString();
 }
 
-function decodeMessage(row) {
+function mapRoom(row) {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    id: row.id,
+    name: row.name,
+    token: row.token,
+    allowApiQuery: row.allowApiQuery,
+    createdAt: Number(row.createdAt),
+  };
+}
+
+function mapMessage(row) {
   return {
     id: row.id,
     room: row.room,
     key: row.key,
-    value: JSON.parse(row.valueJson),
-    createdAt: row.createdAt,
+    value: row.valueJson,
+    createdAt: Number(row.createdAt),
   };
 }
 
-function addMessage(room, key, value) {
-  const result = statements.addMessage.run(room.id, room.name, key, JSON.stringify(value));
-  return decodeMessage(statements.getMessage.get(result.lastInsertRowid));
+async function getRoomByName(name) {
+  return mapRoom(await prisma.room.findUnique({ where: { name } }));
+}
+
+async function getRoomByToken(token) {
+  return mapRoom(await prisma.room.findUnique({ where: { token } }));
+}
+
+async function createRoomRecord(name, token, allowApiQuery) {
+  return mapRoom(await prisma.room.create({
+    data: {
+      name,
+      token,
+      allowApiQuery,
+      createdAt: BigInt(Date.now()),
+    },
+  }));
+}
+
+async function addMessage(room, key, value) {
+  return mapMessage(await prisma.message.create({
+    data: {
+      roomId: room.id,
+      room: room.name,
+      key,
+      valueJson: value,
+      createdAt: BigInt(Date.now()),
+    },
+  }));
+}
+
+async function listRoomMessages(roomName, limit) {
+  const rows = await prisma.message.findMany({
+    where: {
+      room: roomName,
+    },
+    orderBy: {
+      id: "desc",
+    },
+    take: limit,
+  });
+
+  return rows.map(mapMessage);
 }
 
 function extractPushPair(payload) {
@@ -408,14 +355,23 @@ async function handleCreateRoom(request, response, requestUrl) {
     return;
   }
 
-  if (statements.getRoomByName.get(name)) {
+  if (await getRoomByName(name)) {
     sendJson(response, 409, { success: false, error: "Room already exists" });
     return;
   }
 
   const token = createToken();
-  const allowApiQuery = boolFromPayload(payload.allowApiQuery ?? payload.allow_api_query) ? 1 : 0;
-  statements.createRoom.run(name, token, allowApiQuery);
+  const allowApiQuery = boolFromPayload(payload.allowApiQuery ?? payload.allow_api_query);
+
+  try {
+    await createRoomRecord(name, token, allowApiQuery);
+  } catch (error) {
+    if (error?.code === "P2002") {
+      sendJson(response, 409, { success: false, error: "Room already exists" });
+      return;
+    }
+    throw error;
+  }
 
   sendJson(response, 201, {
     success: true,
@@ -427,7 +383,7 @@ async function handleCreateRoom(request, response, requestUrl) {
   });
 }
 
-function handleCheckRoomName(response, requestUrl) {
+async function handleCheckRoomName(response, requestUrl) {
   const name = normalizeName(requestUrl.searchParams.get("name") || requestUrl.searchParams.get("room"));
   if (!name) {
     sendJson(response, 200, {
@@ -451,7 +407,7 @@ function handleCheckRoomName(response, requestUrl) {
     return;
   }
 
-  const exists = Boolean(statements.getRoomByName.get(name));
+  const exists = Boolean(await getRoomByName(name));
   sendJson(response, 200, {
     success: true,
     name,
@@ -469,7 +425,7 @@ async function handlePush(request, response, requestUrl) {
     return;
   }
 
-  const room = statements.getRoomByToken.get(token);
+  const room = await getRoomByToken(token);
   if (!room) {
     sendJson(response, 401, { success: false, error: "Invalid room token" });
     return;
@@ -486,7 +442,7 @@ async function handlePush(request, response, requestUrl) {
     return;
   }
 
-  const message = addMessage(room, pair.key, pair.value);
+  const message = await addMessage(room, pair.key, pair.value);
   io.to(room.name).emit(pair.key, pair.value);
 
   sendJson(response, 200, {
@@ -498,14 +454,14 @@ async function handlePush(request, response, requestUrl) {
   });
 }
 
-function handleMessages(response, requestUrl) {
+async function handleMessages(response, requestUrl) {
   const roomName = normalizeName(requestUrl.searchParams.get("room"));
   if (!roomName) {
     sendJson(response, 400, { success: false, error: "Missing room" });
     return;
   }
 
-  const room = statements.getRoomByName.get(roomName);
+  const room = await getRoomByName(roomName);
   if (!room) {
     sendJson(response, 404, { success: false, error: "Room not found" });
     return;
@@ -517,7 +473,7 @@ function handleMessages(response, requestUrl) {
   }
 
   const limit = Math.min(Math.max(Number.parseInt(requestUrl.searchParams.get("limit") || "100", 10) || 100, 1), MAX_HISTORY_LIMIT);
-  const messages = statements.listRoomMessages.all(roomName, limit).map(decodeMessage);
+  const messages = await listRoomMessages(roomName, limit);
   const roomClients = io.sockets.adapter.rooms.get(room.name)?.size || 0;
   sendJson(response, 200, {
     success: true,
@@ -540,7 +496,7 @@ async function handleApi(request, response, requestUrl) {
   }
 
   if (requestUrl.pathname === "/api/rooms/check" && request.method === "GET") {
-    handleCheckRoomName(response, requestUrl);
+    await handleCheckRoomName(response, requestUrl);
     return;
   }
 
@@ -550,7 +506,7 @@ async function handleApi(request, response, requestUrl) {
   }
 
   if (requestUrl.pathname === "/api/messages" && request.method === "GET") {
-    handleMessages(response, requestUrl);
+    await handleMessages(response, requestUrl);
     return;
   }
 
@@ -586,18 +542,25 @@ const io = new Server(server, {
 });
 
 io.on("connection", (socket) => {
-  socket.on("join", (roomName, ack) => {
-    const room = statements.getRoomByName.get(normalizeName(roomName));
-    if (!room) {
-      if (typeof ack === "function") {
-        ack({ success: false, error: "Room not found" });
+  socket.on("join", async (roomName, ack) => {
+    try {
+      const room = await getRoomByName(normalizeName(roomName));
+      if (!room) {
+        if (typeof ack === "function") {
+          ack({ success: false, error: "Room not found" });
+        }
+        return;
       }
-      return;
-    }
 
-    socket.join(room.name);
-    if (typeof ack === "function") {
-      ack({ success: true, room: room.name });
+      socket.join(room.name);
+      if (typeof ack === "function") {
+        ack({ success: true, room: room.name });
+      }
+    } catch (error) {
+      console.error("[socket:join] error", error);
+      if (typeof ack === "function") {
+        ack({ success: false, error: error.message || String(error) });
+      }
     }
   });
 
@@ -611,14 +574,22 @@ io.on("connection", (socket) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`Broadcast service running on http://${HOST}:${PORT} socketPath=${SOCKET_PATH}`);
-  console.log(`SQLite database: ${DB_PATH}`);
+  console.log("Database: MySQL via Prisma");
 });
 
-function shutdown() {
+let shuttingDown = false;
+async function shutdown() {
+  if (shuttingDown) {
+    return;
+  }
+  shuttingDown = true;
   console.log("Stopping broadcast service.");
   io.close();
-  db.close();
+  await prisma.$disconnect().catch((error) => {
+    console.error("[prisma] disconnect error", error);
+  });
   server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 3000).unref();
 }
 
 process.on("SIGINT", shutdown);
