@@ -21,14 +21,12 @@ model Room {
 model Message {
   id        Int    @id @default(autoincrement()) @db.UnsignedInt
   roomId    Int    @map("room_id") @db.UnsignedInt
-  room      String @db.VarChar(32)
   key       String @db.VarChar(64)
   valueJson Json   @map("value_json")
   createdAt BigInt @default(0) @map("created_at") @db.UnsignedBigInt
   roomRef   Room   @relation(fields: [roomId], references: [id], onDelete: Cascade)
 
   @@index([roomId, id], map: "idx_messages_room_id")
-  @@index([room, createdAt, id], map: "idx_messages_room_created")
   @@index([createdAt, id], map: "idx_messages_created")
   @@map("messages")
 }

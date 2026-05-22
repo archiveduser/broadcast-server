@@ -258,10 +258,10 @@ function mapRoom(row) {
   };
 }
 
-function mapMessage(row) {
+function mapMessage(row, roomName) {
   return {
     id: row.id,
-    room: row.room,
+    room: roomName,
     key: row.key,
     value: row.valueJson,
     createdAt: Number(row.createdAt),
@@ -288,21 +288,22 @@ async function createRoomRecord(name, token, allowApiQuery) {
 }
 
 async function addMessage(room, key, value) {
-  return mapMessage(await prisma.message.create({
+  const message = await prisma.message.create({
     data: {
       roomId: room.id,
-      room: room.name,
       key,
       valueJson: value,
       createdAt: BigInt(Date.now()),
     },
-  }));
+  });
+
+  return mapMessage(message, room.name);
 }
 
-async function listRoomMessages(roomName, limit) {
+async function listRoomMessages(room, limit) {
   const rows = await prisma.message.findMany({
     where: {
-      room: roomName,
+      roomId: room.id,
     },
     orderBy: {
       id: "desc",
@@ -310,7 +311,7 @@ async function listRoomMessages(roomName, limit) {
     take: limit,
   });
 
-  return rows.map(mapMessage);
+  return rows.map((row) => mapMessage(row, room.name));
 }
 
 function extractPushPair(payload) {
@@ -474,7 +475,7 @@ async function handleMessages(response, requestUrl) {
   }
 
   const limit = Math.min(Math.max(Number.parseInt(requestUrl.searchParams.get("limit") || "100", 10) || 100, 1), MAX_HISTORY_LIMIT);
-  const messages = await listRoomMessages(roomName, limit);
+  const messages = await listRoomMessages(room, limit);
   const roomClients = io.sockets.adapter.rooms.get(room.name)?.size || 0;
   sendJson(response, 200, {
     success: true,
