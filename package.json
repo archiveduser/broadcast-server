@@ -4,12 +4,13 @@
   "private": true,
   "scripts": {
     "dev": "vite --host 0.0.0.0",
+    "postinstall": "prisma generate",
     "server": "node broadcast.js",
     "server:watch": "node --watch broadcast.js",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
     "db:dev": "prisma migrate dev",
-    "server:migrate": "npm run db:migrate && npm run server",
+    "server:migrate": "pnpm run db:generate && pnpm run db:migrate && pnpm run server",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0"
   },
